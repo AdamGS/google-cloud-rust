@@ -15,37 +15,47 @@
 //! DirectPath channel factory.
 //!
 //! Uses xDS to discover backend endpoints from Traffic Director, then
-//! connects to those endpoints using ALTS transport security.
+//! connects to those endpoints using ALTS transport security. Discovered
+//! endpoints are cached for 5 minutes to avoid repeated xDS discovery
+//! on every client creation.
 
 use super::alts::connector::AltsConnector;
 use super::xds;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tonic::transport::{Channel, Endpoint};
+
+/// How long cached endpoints remain valid before re-discovery.
+const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+
+struct CacheEntry {
+    endpoints: Vec<xds::BackendEndpoint>,
+    cached_at: Instant,
+}
+
+impl CacheEntry {
+    fn is_fresh(&self) -> bool {
+        self.cached_at.elapsed() < ENDPOINT_CACHE_TTL
+    }
+}
+
+static ENDPOINT_CACHE: LazyLock<RwLock<HashMap<String, CacheEntry>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Creates a gRPC channel to the given service via DirectPath with ALTS.
 ///
-/// 1. Queries Traffic Director via xDS to discover backend endpoint IPs
-/// 2. Connects to the discovered backend using ALTS transport
+/// 1. Checks the endpoint cache for a recent xDS discovery result
+/// 2. If stale or missing, queries Traffic Director via xDS
+/// 3. Connects to the discovered backend using ALTS transport
 ///
 /// `target_name` is the service DNS name (e.g., `storage.googleapis.com`),
 /// used for both xDS resource lookup and ALTS secure naming.
 pub async fn make_direct_path_channel(
     target_name: &str,
 ) -> Result<Channel, DirectPathError> {
-    // Build node identity from GCE metadata.
-    let node = xds::build_node_from_metadata()
-        .await
-        .map_err(DirectPathError::Xds)?;
-
-    // Discover backend endpoints from Traffic Director.
-    let endpoints = xds::discover_endpoints(target_name, node)
-        .await
-        .map_err(DirectPathError::Xds)?;
-
-    if endpoints.is_empty() {
-        return Err(DirectPathError::NoEndpoints);
-    }
-
-    // Connect to the first discovered endpoint using ALTS.
+    let endpoints = resolve_endpoints(target_name).await?;
     let ep = &endpoints[0];
     let uri = format!("http://{}:{}", ep.address, ep.port);
     tracing::info!(
@@ -60,6 +70,61 @@ pub async fn make_direct_path_channel(
         .connect_with_connector(connector)
         .await
         .map_err(DirectPathError::Connect)
+}
+
+async fn resolve_endpoints(
+    target_name: &str,
+) -> Result<Vec<xds::BackendEndpoint>, DirectPathError> {
+    // Check cache first.
+    {
+        let cache = ENDPOINT_CACHE.read().await;
+        if let Some(entry) = cache.get(target_name) {
+            if entry.is_fresh() {
+                tracing::debug!(
+                    "using cached endpoints for '{target_name}' ({} endpoints, age={:?})",
+                    entry.endpoints.len(),
+                    entry.cached_at.elapsed(),
+                );
+                return Ok(entry.endpoints.clone());
+            }
+            tracing::debug!(
+                "cached endpoints for '{target_name}' expired (age={:?})",
+                entry.cached_at.elapsed(),
+            );
+        }
+    }
+
+    // Cache miss or stale — run xDS discovery.
+    let node = xds::build_node_from_metadata()
+        .await
+        .map_err(DirectPathError::Xds)?;
+
+    let endpoints = xds::discover_endpoints(target_name, node)
+        .await
+        .map_err(DirectPathError::Xds)?;
+
+    if endpoints.is_empty() {
+        return Err(DirectPathError::NoEndpoints);
+    }
+
+    // Update cache.
+    {
+        let mut cache = ENDPOINT_CACHE.write().await;
+        cache.insert(
+            target_name.to_string(),
+            CacheEntry {
+                endpoints: endpoints.clone(),
+                cached_at: Instant::now(),
+            },
+        );
+    }
+    tracing::info!(
+        "cached {} endpoints for '{target_name}' (ttl={:?})",
+        endpoints.len(),
+        ENDPOINT_CACHE_TTL,
+    );
+
+    Ok(endpoints)
 }
 
 #[derive(Debug)]
