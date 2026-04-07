@@ -29,6 +29,14 @@ mod direct_connectivity {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_handshaker_diagnostic() -> anyhow::Result<()> {
+        let _guard = enable_tracing();
+        integration_tests_direct_connectivity::handshaker_diagnostic()
+            .await
+            .inspect_err(anydump)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_gce_detection() -> anyhow::Result<()> {
         let _guard = enable_tracing();
         integration_tests_direct_connectivity::gce_detection()

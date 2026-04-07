@@ -45,6 +45,25 @@ fn bucket_name() -> Result<String> {
     Ok(format!("projects/_/buckets/{id}"))
 }
 
+/// Diagnostic: check if the ALTS handshaker service is reachable and
+/// responds to a basic request.
+#[cfg(google_cloud_unstable_direct_connectivity)]
+pub async fn handshaker_diagnostic() -> Result<()> {
+    use google_cloud_gax_internal::direct_connectivity::alts::handshaker;
+
+    tracing::info!("running ALTS handshaker diagnostic");
+    match handshaker::check_handshaker_reachable().await {
+        Ok(msg) => {
+            tracing::info!("handshaker diagnostic: {msg}");
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("handshaker diagnostic FAILED: {e}");
+            Err(anyhow::anyhow!("ALTS handshaker not reachable: {e}"))
+        }
+    }
+}
+
 /// Verify that GCE metadata server detection works on this VM.
 #[cfg(google_cloud_unstable_direct_connectivity)]
 pub async fn gce_detection() -> Result<()> {
