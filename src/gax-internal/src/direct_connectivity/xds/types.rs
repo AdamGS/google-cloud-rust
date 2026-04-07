@@ -87,12 +87,12 @@ pub struct ApiListener {
 
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct HttpConnectionManager {
-    /// Inline route configuration (route_specifier oneof, tag 5).
-    #[prost(message, optional, tag = "5")]
-    pub route_config: Option<RouteConfiguration>,
     /// RDS configuration (route_specifier oneof, tag 3).
     #[prost(message, optional, tag = "3")]
     pub rds: Option<Rds>,
+    /// Inline route configuration (route_specifier oneof, tag 4).
+    #[prost(message, optional, tag = "4")]
+    pub route_config: Option<RouteConfiguration>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
