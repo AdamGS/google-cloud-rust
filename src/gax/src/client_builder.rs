@@ -221,6 +221,20 @@ impl<F, Cr> ClientBuilder<F, Cr> {
         self
     }
 
+    /// Configure direct connectivity mode (ALTS + DirectPath).
+    ///
+    /// Direct connectivity enables gRPC requests from Compute Engine VMs
+    /// to bypass Google Front Ends and route directly to the backend
+    /// service, reducing latency.
+    #[cfg(google_cloud_unstable_direct_connectivity)]
+    pub fn with_direct_connectivity(
+        mut self,
+        mode: crate::direct_connectivity::DirectConnectivityMode,
+    ) -> Self {
+        self.config.direct_connectivity = Some(mode);
+        self
+    }
+
     /// Configure the authentication credentials.
     ///
     /// Most Google Cloud services require authentication, though some services

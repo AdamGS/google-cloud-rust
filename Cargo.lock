@@ -5654,6 +5654,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests-direct-connectivity"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-storage",
+ "google-cloud-test-utils",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "integration-tests-discovery"
 version = "0.0.0"
 dependencies = [
