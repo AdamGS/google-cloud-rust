@@ -52,17 +52,24 @@ pub async fn discover_endpoints(
     );
 
     // Connect to Traffic Director with TLS.
+    tracing::info!("connecting to Traffic Director at {TRAFFIC_DIRECTOR_ADDR}");
     let channel = tonic::transport::Channel::from_static(TRAFFIC_DIRECTOR_ADDR)
         .tls_config(
             tonic::transport::ClientTlsConfig::new().with_enabled_roots(),
         )
         .map_err(|e| XdsError::Transport(e.to_string()))?
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .connect()
         .await
-        .map_err(|e| XdsError::Transport(e.to_string()))?;
-    tracing::debug!("connected to Traffic Director");
+        .map_err(|e| {
+            tracing::error!("failed to connect to Traffic Director: {e}");
+            XdsError::Transport(e.to_string())
+        })?;
+    tracing::info!("connected to Traffic Director");
 
-    // We need to inject auth headers. Get credentials.
+    // Get credentials for auth.
+    tracing::info!("acquiring credentials");
     let creds = google_cloud_auth::credentials::Builder::default()
         .build()
         .map_err(|e| XdsError::Auth(e.to_string()))?;
@@ -70,17 +77,15 @@ pub async fn discover_endpoints(
     let (tx, rx) = tokio::sync::mpsc::channel::<DiscoveryRequest>(8);
     let request_stream = ReceiverStream::new(rx);
 
-    // The ADS service path is:
-    // /envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources
-    //
-    // We manually construct the gRPC call since we don't have the
-    // generated ADS client.
     let mut grpc = tonic::client::Grpc::new(channel);
+    tracing::info!("waiting for gRPC channel ready");
     grpc.ready()
         .await
         .map_err(|e| XdsError::Transport(e.to_string()))?;
+    tracing::info!("gRPC channel ready");
 
     // Add auth header.
+    tracing::info!("fetching auth headers");
     use google_cloud_auth::credentials::CacheableResource;
     let headers = creds
         .headers(http::Extensions::new())
@@ -90,6 +95,7 @@ pub async fn discover_endpoints(
         CacheableResource::New { data, .. } => data,
         _ => http::HeaderMap::new(),
     };
+    tracing::info!("got {} auth headers", auth_headers.len());
 
     let mut request = tonic::Request::new(request_stream);
     for (k, v) in auth_headers.iter() {
@@ -109,17 +115,10 @@ pub async fn discover_endpoints(
         "/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources",
     );
 
-    let response: tonic::Response<tonic::Streaming<DiscoveryResponse>> = grpc
-        .streaming(request, path, codec)
-        .await
-        .map_err(|s: tonic::Status| {
-            tracing::error!("ADS StreamAggregatedResources failed: {s}");
-            XdsError::Rpc(s.to_string())
-        })?;
-    let mut response_stream = response.into_inner();
-
-    // Step 1: LDS - discover the listener for our service
-    tracing::debug!("sending LDS request for '{service_name}'");
+    // Send the initial LDS request BEFORE opening the stream.
+    // The server won't send response headers until it receives the
+    // first request, so we must pre-populate the channel.
+    tracing::info!("sending LDS request for '{service_name}'");
     let lds_req = DiscoveryRequest {
         node: Some(node.clone()),
         type_url: LDS_TYPE_URL.to_string(),
@@ -129,6 +128,17 @@ pub async fn discover_endpoints(
     tx.send(lds_req)
         .await
         .map_err(|_| XdsError::ChannelClosed)?;
+
+    tracing::info!("opening ADS stream");
+    let response: tonic::Response<tonic::Streaming<DiscoveryResponse>> = grpc
+        .streaming(request, path, codec)
+        .await
+        .map_err(|s: tonic::Status| {
+            tracing::error!("ADS StreamAggregatedResources failed: {s}");
+            XdsError::Rpc(s.to_string())
+        })?;
+    tracing::info!("ADS stream opened");
+    let mut response_stream = response.into_inner();
 
     let lds_resp = recv_response(&mut response_stream, LDS_TYPE_URL).await?;
     let cluster_name = extract_cluster_from_lds(&lds_resp)?;
@@ -275,7 +285,7 @@ async fn recv_response(
                 tracing::error!("ADS stream ended waiting for {expected_type}");
                 XdsError::StreamEnded
             })?;
-        tracing::debug!(
+        tracing::info!(
             "received xDS response: type={}, resources={}, version={}, nonce={}",
             resp.type_url,
             resp.resources.len(),
@@ -294,34 +304,86 @@ async fn recv_response(
 }
 
 fn extract_cluster_from_lds(resp: &DiscoveryResponse) -> Result<String, XdsError> {
-    for any in &resp.resources {
+    tracing::info!(
+        "LDS response: {} resources, version='{}', type_url='{}'",
+        resp.resources.len(),
+        resp.version_info,
+        resp.type_url,
+    );
+
+    for (i, any) in resp.resources.iter().enumerate() {
+        tracing::info!(
+            "LDS resource[{i}]: type_url='{}', {} bytes",
+            any.type_url,
+            any.value.len(),
+        );
+
         let listener = Listener::decode(any.value.as_ref())
             .map_err(|e| XdsError::Decode(format!("Listener: {e}")))?;
 
-        tracing::debug!("LDS listener name: '{}'", listener.name);
+        tracing::info!(
+            "LDS listener name='{}', has_api_listener={}",
+            listener.name,
+            listener.api_listener.is_some(),
+        );
 
-        let api_listener = listener
-            .api_listener
-            .and_then(|al| al.api_listener)
-            .ok_or_else(|| XdsError::Decode("Listener missing api_listener".into()))?;
+        let api_listener = match listener.api_listener.and_then(|al| al.api_listener) {
+            Some(al) => al,
+            None => {
+                tracing::info!("LDS listener '{}' has no api_listener, skipping", listener.name);
+                continue;
+            }
+        };
+
+        tracing::info!(
+            "api_listener type_url='{}', {} bytes",
+            api_listener.type_url,
+            api_listener.value.len(),
+        );
 
         if api_listener.type_url == HTTP_CONNECTION_MANAGER_TYPE_URL {
             let hcm = HttpConnectionManager::decode(api_listener.value.as_ref())
                 .map_err(|e| XdsError::Decode(format!("HttpConnectionManager: {e}")))?;
 
+            tracing::info!(
+                "HCM: has_route_config={}, has_rds={}",
+                hcm.route_config.is_some(),
+                hcm.rds.is_some(),
+            );
+
             // Try inline route config first.
             if let Some(rc) = &hcm.route_config {
+                tracing::info!(
+                    "inline RouteConfig name='{}', {} virtual_hosts",
+                    rc.name,
+                    rc.virtual_hosts.len(),
+                );
+                for vh in &rc.virtual_hosts {
+                    tracing::info!(
+                        "  VirtualHost name='{}', {} routes",
+                        vh.name,
+                        vh.routes.len(),
+                    );
+                    for route in &vh.routes {
+                        let cluster = route.route.as_ref().map(|r| r.cluster.as_str()).unwrap_or("");
+                        tracing::info!("    Route -> cluster='{cluster}'");
+                    }
+                }
                 if let Some(cluster) = first_cluster_from_route_config(rc) {
                     return Ok(cluster);
                 }
             }
-            // If RDS is configured, use the route_config_name as cluster name
-            // (simplification — real impl would do an RDS request).
             if let Some(rds) = &hcm.rds {
-                tracing::debug!("LDS uses RDS with route_config_name: '{}'", rds.route_config_name);
-                // Fall back to using the service name as the cluster name.
-                // This is a simplification.
+                tracing::info!(
+                    "HCM uses RDS, route_config_name='{}'",
+                    rds.route_config_name
+                );
             }
+        } else {
+            tracing::info!(
+                "api_listener type '{}' is not HttpConnectionManager, skipping",
+                api_listener.type_url
+            );
         }
     }
     Err(XdsError::Decode(
