@@ -26,4 +26,20 @@ fn main() {
     f.write_all(format!("pub(crate) const RUSTC_VERSION: &str = \"{rust_version}\";").as_bytes())
         .expect("Unable to write rust version");
     f.flush().expect("failed to flush");
+
+    #[cfg(google_cloud_generate_protos)]
+    {
+        tonic_prost_build::configure()
+            .build_server(false)
+            .out_dir("src/generated/protos/gcp")
+            .compile_protos(
+                &[
+                    "protos/grpc/gcp/handshaker.proto",
+                    "protos/grpc/gcp/altscontext.proto",
+                    "protos/grpc/gcp/transport_security_common.proto",
+                ],
+                &["protos"],
+            )
+            .expect("error compiling ALTS protos");
+    }
 }

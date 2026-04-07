@@ -2795,6 +2795,7 @@ name = "google-cloud-gax-internal"
 version = "0.7.12"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "bytes",
  "echo-server",
  "futures",
@@ -2810,6 +2811,7 @@ dependencies = [
  "http-body-util",
  "httptest",
  "hyper",
+ "hyper-util",
  "lazy_static",
  "mockall",
  "opentelemetry",
@@ -2834,6 +2836,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-prost",
+ "tonic-prost-build",
  "tower",
  "tracing",
  "tracing-opentelemetry",

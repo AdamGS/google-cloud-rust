@@ -440,6 +440,8 @@ pub mod internal {
         pub grpc_subchannel_count: Option<usize>,
         pub grpc_request_buffer_capacity: Option<usize>,
         pub grpc_max_header_list_size: Option<u32>,
+        #[cfg(google_cloud_unstable_direct_connectivity)]
+        pub direct_connectivity: Option<crate::direct_connectivity::DirectConnectivityMode>,
     }
 
     impl<Cr> std::default::Default for ClientConfig<Cr> {
@@ -461,6 +463,8 @@ pub mod internal {
                 grpc_subchannel_count: None,
                 grpc_request_buffer_capacity: None,
                 grpc_max_header_list_size: None,
+                #[cfg(google_cloud_unstable_direct_connectivity)]
+                direct_connectivity: None,
             }
         }
     }

@@ -41,6 +41,8 @@ pub mod response;
 
 pub mod backoff_policy;
 pub mod client_builder;
+#[cfg(google_cloud_unstable_direct_connectivity)]
+pub mod direct_connectivity;
 pub mod exponential_backoff;
 pub mod options;
 pub mod polling_backoff_policy;

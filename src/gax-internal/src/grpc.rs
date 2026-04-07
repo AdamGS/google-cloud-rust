@@ -414,6 +414,38 @@ impl Client {
         >,
     ) -> ClientBuilderResult<InnerClient> {
         use ::tonic::transport::{Channel, channel::Change};
+
+        // When direct connectivity is enabled and available, create a
+        // DirectPath channel using ALTS transport. This channel bypasses
+        // Google Front Ends for lower latency.
+        #[cfg(google_cloud_unstable_direct_connectivity)]
+        {
+            use crate::direct_connectivity::{self, config as dc_config};
+            let mode = dc_config::resolve_mode(config.direct_connectivity.as_ref());
+            if direct_connectivity::should_use_direct_connectivity(&mode).await {
+                let origin = crate::host::origin(config.endpoint.as_deref(), default_endpoint)
+                    .map_err(|e| e.client_builder())?;
+                let target_name = origin.host().unwrap_or("").to_string();
+                match direct_connectivity::channel::make_direct_path_channel(&target_name).await {
+                    Ok(channel) => {
+                        return Self::wrap_channel(
+                            channel,
+                            tracing_enabled,
+                            #[cfg(google_cloud_unstable_tracing)]
+                            default_endpoint,
+                            #[cfg(google_cloud_unstable_tracing)]
+                            instrumentation,
+                        );
+                    }
+                    Err(_) if matches!(mode, direct_connectivity::DirectConnectivityMode::Auto) => {
+                        // Fall through to standard TLS path.
+                    }
+                    Err(e) => return Err(BuilderError::transport(e)),
+                }
+            }
+        }
+
+        // Standard path: create TLS endpoint(s) via balance_channel.
         let endpoint = Self::make_endpoint(
             config.endpoint.clone(),
             default_endpoint,
@@ -487,6 +519,51 @@ impl Client {
             endpoint = endpoint.http2_max_header_list_size(limit);
         }
         Ok(endpoint)
+    }
+
+    /// Wraps a pre-connected `Channel` with the tracing layer (if enabled).
+    ///
+    /// Used by the direct connectivity path where the channel is created
+    /// via `connect_with_connector` rather than `balance_channel`.
+    #[cfg(google_cloud_unstable_direct_connectivity)]
+    fn wrap_channel(
+        channel: ::tonic::transport::Channel,
+        tracing_enabled: bool,
+        #[cfg(google_cloud_unstable_tracing)] default_endpoint: &str,
+        #[cfg(google_cloud_unstable_tracing)] instrumentation: Option<
+            &'static crate::options::InstrumentationClientInfo,
+        >,
+    ) -> ClientBuilderResult<InnerClient> {
+        #[cfg(not(google_cloud_unstable_tracing))]
+        {
+            let _ = tracing_enabled;
+            Ok(InnerClient::new(channel))
+        }
+
+        #[cfg(google_cloud_unstable_tracing)]
+        {
+            use crate::observability::grpc_tracing::NoTracingTowerLayer;
+            use crate::observability::grpc_tracing::TracingTowerLayer;
+            use tower::ServiceBuilder;
+            use tower::util::Either;
+
+            if tracing_enabled {
+                let default_uri = default_endpoint
+                    .parse::<::tonic::transport::Uri>()
+                    .map_err(BuilderError::transport)?;
+                let default_host = default_uri.host().unwrap_or("").to_string();
+                let dp_uri = "https://directpath-pa.googleapis.com"
+                    .parse::<::tonic::transport::Uri>()
+                    .map_err(BuilderError::transport)?;
+                let layer = TracingTowerLayer::new(&dp_uri, default_host, instrumentation);
+                let service = ServiceBuilder::new().layer(layer).service(channel);
+                Ok(InnerClient::new(Either::Left(service)))
+            } else {
+                let layer = NoTracingTowerLayer;
+                let service = ServiceBuilder::new().layer(layer).service(channel);
+                Ok(InnerClient::new(Either::Right(service)))
+            }
+        }
     }
 
     async fn make_credentials(

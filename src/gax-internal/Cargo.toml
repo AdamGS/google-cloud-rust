@@ -93,8 +93,17 @@ _internal-common = [
 _default-rustls-provider = ["google-cloud-auth?/default-rustls-provider", "tonic?/tls-aws-lc"]
 # Enables the unstable server streaming functionality in the gRPC client.
 _internal-grpc-server-streaming = []
+# Enables direct connectivity support (ALTS + DirectPath).
+_internal-direct-connectivity = [
+  "_internal-grpc-client",
+  "_internal-http-client",
+  "dep:aws-lc-rs",
+  "dep:hyper-util",
+  "tonic?/codegen",
+]
 
 [dependencies]
+aws-lc-rs                          = { workspace = true, optional = true }
 bytes                              = { workspace = true, optional = true, features = ["serde"] }
 futures                            = { workspace = true, optional = true }
 lazy_static                        = { workspace = true, optional = true }
@@ -102,6 +111,7 @@ http                               = { workspace = true, optional = true }
 http-body                          = { workspace = true, optional = true }
 http-body-util                     = { workspace = true, optional = true }
 hyper                              = { workspace = true, optional = true }
+hyper-util                         = { workspace = true, optional = true, features = ["tokio"] }
 opentelemetry                      = { workspace = true, optional = true, features = ["internal-logs", "metrics"] }
 opentelemetry_sdk                  = { workspace = true, optional = true, features = ["trace"] }
 opentelemetry-semantic-conventions = { workspace = true, optional = true, features = ["semconv_experimental"] }
@@ -154,3 +164,4 @@ google-cloud-gax-internal = { path = ".", features = ["_default-rustls-provider"
 
 [build-dependencies]
 rustc_version.workspace = true
+tonic-prost-build.workspace = true

@@ -63,6 +63,12 @@ pub mod routing_parameter;
 #[cfg(any(feature = "_internal-http-client", feature = "_internal-grpc-client"))]
 pub(crate) mod host;
 
+#[cfg(all(
+    feature = "_internal-direct-connectivity",
+    google_cloud_unstable_direct_connectivity
+))]
+pub mod direct_connectivity;
+
 #[cfg(feature = "_internal-grpc-client")]
 pub(crate) mod google {
     pub mod rpc {
