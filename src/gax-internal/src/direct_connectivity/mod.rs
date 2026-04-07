@@ -16,6 +16,7 @@ pub mod alts;
 pub mod channel;
 pub mod config;
 pub mod gce;
+pub mod xds;
 
 #[allow(dead_code)]
 pub(crate) mod proto {

@@ -99,6 +99,7 @@ _internal-direct-connectivity = [
   "_internal-http-client",
   "dep:aws-lc-rs",
   "dep:hyper-util",
+  "dep:rand",
   "tonic?/codegen",
 ]
 
@@ -118,6 +119,7 @@ opentelemetry-semantic-conventions = { workspace = true, optional = true, featur
 percent-encoding                   = { workspace = true, optional = true }
 pin-project                        = { workspace = true, optional = true }
 prost                              = { workspace = true, optional = true }
+rand                               = { workspace = true, optional = true, features = ["thread_rng"] }
 prost-types                        = { workspace = true, optional = true }
 reqwest                            = { workspace = true, optional = true, features = ["json", "query"] }
 serde                              = { workspace = true, optional = true }

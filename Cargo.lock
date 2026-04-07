@@ -2823,6 +2823,7 @@ dependencies = [
  "pretty_assertions",
  "prost",
  "prost-types",
+ "rand 0.10.0",
  "reqwest 0.13.2",
  "rustc_version",
  "scoped-env",
