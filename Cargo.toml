@@ -377,6 +377,7 @@ humantime             = { default-features = false, version = "2" }
 hyper                 = { default-features = false, version = "1.6" }
 hyper-util            = { default-features = false, version = "0.1.20" }
 jsonwebtoken          = { default-features = false, version = "10.2" }
+moka                  = { default-features = false, version = "0.12" }
 opentelemetry         = { default-features = false, version = "0.31" }
 opentelemetry-proto   = { default-features = false, version = "0.31" }
 opentelemetry_sdk     = { default-features = false, version = "0.31" }

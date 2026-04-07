@@ -16,33 +16,25 @@
 //!
 //! Uses xDS to discover backend endpoints from Traffic Director, then
 //! connects to those endpoints using ALTS transport security. Discovered
-//! endpoints are cached for 5 minutes to avoid repeated xDS discovery
-//! on every client creation.
+//! endpoints are cached with a 5-minute TTL to avoid repeated xDS
+//! discovery on every client creation.
 
 use super::alts::connector::AltsConnector;
 use super::xds;
-use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
 
 /// How long cached endpoints remain valid before re-discovery.
 const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
-struct CacheEntry {
-    endpoints: Vec<xds::BackendEndpoint>,
-    cached_at: Instant,
-}
-
-impl CacheEntry {
-    fn is_fresh(&self) -> bool {
-        self.cached_at.elapsed() < ENDPOINT_CACHE_TTL
-    }
-}
-
-static ENDPOINT_CACHE: LazyLock<RwLock<HashMap<String, CacheEntry>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+static ENDPOINT_CACHE: LazyLock<moka::future::Cache<String, Vec<xds::BackendEndpoint>>> =
+    LazyLock::new(|| {
+        moka::future::Cache::builder()
+            .max_capacity(64)
+            .time_to_live(ENDPOINT_CACHE_TTL)
+            .build()
+    });
 
 /// Creates a gRPC channel to the given service via DirectPath with ALTS.
 ///
@@ -75,26 +67,15 @@ pub async fn make_direct_path_channel(
 async fn resolve_endpoints(
     target_name: &str,
 ) -> Result<Vec<xds::BackendEndpoint>, DirectPathError> {
-    // Check cache first.
-    {
-        let cache = ENDPOINT_CACHE.read().await;
-        if let Some(entry) = cache.get(target_name) {
-            if entry.is_fresh() {
-                tracing::debug!(
-                    "using cached endpoints for '{target_name}' ({} endpoints, age={:?})",
-                    entry.endpoints.len(),
-                    entry.cached_at.elapsed(),
-                );
-                return Ok(entry.endpoints.clone());
-            }
-            tracing::debug!(
-                "cached endpoints for '{target_name}' expired (age={:?})",
-                entry.cached_at.elapsed(),
-            );
-        }
+    if let Some(cached) = ENDPOINT_CACHE.get(target_name).await {
+        tracing::debug!(
+            "using cached endpoints for '{target_name}' ({} endpoints)",
+            cached.len(),
+        );
+        return Ok(cached);
     }
 
-    // Cache miss or stale — run xDS discovery.
+    // Cache miss — run xDS discovery.
     let node = xds::build_node_from_metadata()
         .await
         .map_err(DirectPathError::Xds)?;
@@ -107,21 +88,12 @@ async fn resolve_endpoints(
         return Err(DirectPathError::NoEndpoints);
     }
 
-    // Update cache.
-    {
-        let mut cache = ENDPOINT_CACHE.write().await;
-        cache.insert(
-            target_name.to_string(),
-            CacheEntry {
-                endpoints: endpoints.clone(),
-                cached_at: Instant::now(),
-            },
-        );
-    }
+    ENDPOINT_CACHE
+        .insert(target_name.to_string(), endpoints.clone())
+        .await;
     tracing::info!(
-        "cached {} endpoints for '{target_name}' (ttl={:?})",
+        "cached {} endpoints for '{target_name}' (ttl={ENDPOINT_CACHE_TTL:?})",
         endpoints.len(),
-        ENDPOINT_CACHE_TTL,
     );
 
     Ok(endpoints)

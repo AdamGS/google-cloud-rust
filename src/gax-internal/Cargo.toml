@@ -99,6 +99,7 @@ _internal-direct-connectivity = [
   "_internal-http-client",
   "dep:aws-lc-rs",
   "dep:hyper-util",
+  "dep:moka",
   "dep:rand",
   "tonic?/codegen",
 ]
@@ -113,6 +114,7 @@ http-body                          = { workspace = true, optional = true }
 http-body-util                     = { workspace = true, optional = true }
 hyper                              = { workspace = true, optional = true }
 hyper-util                         = { workspace = true, optional = true, features = ["tokio"] }
+moka                               = { workspace = true, optional = true, features = ["future"] }
 opentelemetry                      = { workspace = true, optional = true, features = ["internal-logs", "metrics"] }
 opentelemetry_sdk                  = { workspace = true, optional = true, features = ["trace"] }
 opentelemetry-semantic-conventions = { workspace = true, optional = true, features = ["semconv_experimental"] }
